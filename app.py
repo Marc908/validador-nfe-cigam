@@ -3,143 +3,116 @@ from pydantic import BaseModel
 from lxml import etree
 import requests
 from bs4 import BeautifulSoup
-import os
-import uvicorn
+import io
 
 app = FastAPI(title="Validador NF-e CIGAM")
 
-# ---------- MODELOS ----------
 class XmlRequest(BaseModel):
     xml: str
 
-# ---------- MENSAGENS AMIGÁVEIS ----------
-friendly_messages = {
-    225: {
-        "erro": "A NF-e foi rejeitada porque o arquivo XML está incorreto.",
-        "onde_ocorreu": "Estrutura do XML",
-        "como_resolver": (
-            "Verifique se o XML foi gerado corretamente no CIGAM. "
-            "Esse erro acontece quando existe tag faltando, duplicada ou valor fora do padrão. "
-            "Sugestão: reenvie a NF-e ou gere novamente."
-        )
-    },
-    217: {
-        "erro": "A NF-e não consta na base de dados da SEFAZ.",
-        "onde_ocorreu": "Consulta na SEFAZ",
-        "como_resolver": (
-            "Isso acontece quando tenta consultar uma NF-e que nunca foi autorizada. "
-            "Confirme se a nota foi transmitida com sucesso no CIGAM e reenvie se necessário."
-        )
-    },
-    539: {
-        "erro": "Já existe uma NF-e com a mesma numeração, mas com chave diferente.",
-        "onde_ocorreu": "Chave de Acesso",
-        "como_resolver": (
-            "Verifique a numeração da nota no CIGAM. "
-            "Se já existe uma nota com o mesmo número, corrija a sequência e transmita novamente."
-        )
-    },
-    204: {
-        "erro": "Duplicidade de NF-e.",
-        "onde_ocorreu": "Chave de Acesso",
-        "como_resolver": (
-            "A NF-e já foi transmitida e autorizada. "
-            "Não é necessário reenviar. "
-            "Consulte a autorização anterior para confirmar."
-        )
-    },
-    237: {
-        "erro": "CPF ou CNPJ do destinatário inválido.",
-        "onde_ocorreu": "Cadastro do Cliente",
-        "como_resolver": (
-            "Verifique o CPF ou CNPJ do cliente no CIGAM. "
-            "Corrija no cadastro e reenvie a nota."
-        )
-    },
-    482: {
-        "erro": "CFOP inválido para a operação.",
-        "onde_ocorreu": "Impostos → CFOP",
-        "como_resolver": (
-            "O CFOP informado não é aceito para essa operação. "
-            "Verifique a tabela de CFOPs e ajuste no item da nota no CIGAM."
-        )
-    },
-    501: {
-        "erro": "CST incompatível com a operação.",
-        "onde_ocorreu": "Impostos → CST",
-        "como_resolver": (
-            "O CST usado não corresponde ao tipo de operação. "
-            "Corrija no cadastro de impostos no CIGAM antes de reenviar."
-        )
-    },
-    580: {
-        "erro": "Inscrição Estadual (IE) do destinatário não informada.",
-        "onde_ocorreu": "Cadastro do Cliente",
-        "como_resolver": (
-            "Inclua a IE no cadastro do cliente no CIGAM. "
-            "Se o cliente for isento, marque como 'ISENTO'."
-        )
-    },
-    999: {
-        "erro": "Erro interno da SEFAZ.",
-        "onde_ocorreu": "Serviço da SEFAZ",
-        "como_resolver": (
-            "Esse erro não depende do CIGAM. "
-            "Aguarde alguns minutos e tente novamente. "
-            "Se persistir, consulte o status do serviço da SEFAZ."
-        )
-    },
-    9999: {
-        "erro": "Erro desconhecido.",
-        "onde_ocorreu": "Não identificado",
-        "como_resolver": (
-            "Revise o XML e tente reenviar. "
-            "Se continuar com problema, entre em contato com o suporte CIGAM."
-        )
+# ---------- Função para pegar XSD direto da SEFAZ ----------
+def baixar_xsd(root_tag: str):
+    base_url = "http://www.nfe.fazenda.gov.br/portal/exibirArquivo.aspx?conteudo="
+
+    # Mapeamento completo de schemas NF-e v4.00
+    schemas = {
+        # Autorização
+        "enviNFe": "enviNFe_v4.00.xsd",
+        "retEnviNFe": "retEnviNFe_v4.00.xsd",
+        "retConsReciNFe": "retConsReciNFe_v4.00.xsd",
+
+        # Consulta NF-e
+        "consSitNFe": "consSitNFe_v4.00.xsd",
+        "retConsSitNFe": "retConsSitNFe_v4.00.xsd",
+
+        # Inutilização
+        "inutNFe": "inutNFe_v4.00.xsd",
+        "retInutNFe": "retInutNFe_v4.00.xsd",
+
+        # Cancelamento (Evento)
+        "envEventoCancNFe": "envEventoCancNFe_v1.00.xsd",
+        "retEnvEventoCancNFe": "retEnvEventoCancNFe_v1.00.xsd",
+
+        # Carta de Correção (Evento)
+        "envCCe": "envCCe_v1.00.xsd",
+        "retEnvCCe": "retEnvCCe_v1.00.xsd",
+
+        # Manifestação do Destinatário (Evento)
+        "envManifestacao": "envManifestacao_v1.00.xsd",
+        "retEnvManifestacao": "retEnvManifestacao_v1.00.xsd",
+
+        # Consulta Cadastro
+        "consCad": "consCad_v2.00.xsd",
+        "retConsCad": "retConsCad_v2.00.xsd"
     }
-}
-# ---------- FUNÇÃO AUXILIAR ----------
-def buscar_na_wiki(codigo: int) -> dict:
+
+    if root_tag not in schemas:
+        raise HTTPException(status_code=400, detail=f"Schema não suportado: {root_tag}")
+
+    schema_url = base_url + schemas[root_tag]
+    r = requests.get(schema_url)
+    if r.status_code != 200:
+        raise HTTPException(status_code=500, detail=f"Não foi possível baixar XSD da SEFAZ ({root_tag})")
+
+    return etree.parse(io.BytesIO(r.content))
+
+# ---------- Função para validar XML ----------
+def validar_xml(xml_str: str):
     try:
-        url = f"https://www.cigam.com.br/wiki/index.php?title=FAQ_NE_{codigo}"
-        resp = requests.get(url, timeout=10)
-        if resp.status_code == 200:
-            soup = BeautifulSoup(resp.text, "html.parser")
-            content = soup.find("div", {"id": "mw-content-text"})
-            if content:
-                texto = content.get_text(" ", strip=True)[:500]
-                return {"erro": f"Rejeição {codigo}", "como_resolver": texto, "fonte": url}
+        xml_doc = etree.fromstring(xml_str.encode("utf-8"))
+
+        # Identifica tag raiz
+        root_tag = etree.QName(xml_doc.tag).localname
+        schema_doc = baixar_xsd(root_tag)
+        schema = etree.XMLSchema(schema_doc)
+
+        schema.assertValid(xml_doc)
+        return {"status": "OK", "mensagem": "XML válido segundo schema SEFAZ"}
+    except etree.DocumentInvalid as e:
+        last_error = e.error_log.last_error
+        return {
+            "status": "Erro",
+            "codigo": 225,  # Código oficial para falha de schema
+            "mensagem": "Rejeicao: Falha no Schema XML da NFe",
+            "detalhe": str(last_error)
+        }
     except Exception as e:
-        print(f"[Wiki] Falha ao buscar {codigo}: {e}")
-    return {"erro": f"Rejeição {codigo}", "como_resolver": "Consulte a Wiki CIGAM.", "fonte": "Wiki CIGAM"}
+        raise HTTPException(status_code=400, detail=f"Erro ao processar XML: {str(e)}")
 
-# ---------- ENDPOINTS ----------
-@app.get("/")
-def root():
-    return {"status": "ok", "mensagem": "API Validador NF-e CIGAM rodando!"}
+# ---------- Função para checar disponibilidade SEFAZ ----------
+def disponibilidade_sefaz():
+    url = "https://www.nfe.fazenda.gov.br/portal/disponibilidade.aspx"
+    r = requests.get(url)
+    if r.status_code != 200:
+        raise HTTPException(status_code=500, detail="Não foi possível acessar a disponibilidade da SEFAZ")
 
-@app.post("/nfe/validate-xml")
-async def validate_nfe_xml(req: XmlRequest):
-    try:
-        xml_tree = etree.fromstring(req.xml.encode("utf-8"))
+    soup = BeautifulSoup(r.text, "html.parser")
+    status = {}
+    for row in soup.select("table.tabelaListagemDados tbody tr"):
+        cols = [c.get_text(strip=True) for c in row.find_all("td")]
+        if cols:
+            uf = cols[0]
+            status[uf] = {
+                "Autorizacao": cols[1],
+                "Retorno": cols[2],
+                "Consulta": cols[3],
+                "Inutilizacao": cols[4],
+                "StatusServico": cols[5],
+            }
+    return status
 
-        # Simula código de rejeição
-        codigo = 225
+# ---------- Endpoint principal ----------
+@app.post("/validar-nfe")
+def validar_nfe(req: XmlRequest):
+    xml_str = req.xml
 
-        if codigo in friendly_messages:
-            return {"codigo": codigo, **friendly_messages[codigo], "fonte": "Tratamento interno CIGAM"}
+    # 1 - Validar contra XSD oficial (online)
+    resultado_validacao = validar_xml(xml_str)
 
-        wiki_info = buscar_na_wiki(codigo)
-        return {"codigo": codigo, **wiki_info}
+    # 2 - Consultar disponibilidade SEFAZ
+    status = disponibilidade_sefaz()
 
-    except etree.XMLSyntaxError as e:
-        raise HTTPException(status_code=400, detail=f"Erro de sintaxe XML: {str(e)}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Falha ao processar XML: {str(e)}")
-
-# ---------- RUN SERVER ----------
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    uvicorn.run("app:app", host="0.0.0.0", port=port, reload=True)
-
-
+    return {
+        "validacao_xml": resultado_validacao,
+        "disponibilidade": status
+    }
