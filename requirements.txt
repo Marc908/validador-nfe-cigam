@@ -1,5 +1,8 @@
 fastapi
-uvicorn[standard]
+uvicorn
 lxml
+httpx
 requests
 beautifulsoup4
+
+
