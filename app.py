@@ -3,6 +3,12 @@ from pydantic import BaseModel
 from lxml import etree
 import requests
 from bs4 import BeautifulSoup
+import os
+import uvicorn
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run("app:app", host="0.0.0.0", port=port, reload=True)
 
 app = FastAPI(title="Validador NF-e CIGAM")
 
@@ -139,3 +145,4 @@ async def validate_nfe_xml(req: XmlRequest):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run("app:app", host="0.0.0.0", port=port, reload=True)
+
