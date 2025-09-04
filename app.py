@@ -98,89 +98,44 @@ friendly_messages = {
 }
 # ---------- FUNÇÃO AUXILIAR ----------
 def buscar_na_wiki(codigo: int) -> dict:
-    """
-    Busca na Wiki CIGAM informações sobre o código de rejeição.
-    Se não achar, retorna um texto genérico.
-    """
     try:
         url = f"https://www.cigam.com.br/wiki/index.php?title=FAQ_NE_{codigo}"
         resp = requests.get(url, timeout=10)
-
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, "html.parser")
             content = soup.find("div", {"id": "mw-content-text"})
             if content:
                 texto = content.get_text(" ", strip=True)[:500]
-                return {
-                    "erro": f"Rejeição {codigo}",
-                    "como_resolver": texto,
-                    "fonte": url
-                }
+                return {"erro": f"Rejeição {codigo}", "como_resolver": texto, "fonte": url}
     except Exception as e:
         print(f"[Wiki] Falha ao buscar {codigo}: {e}")
-
-    return {
-        "erro": f"Rejeição {codigo}",
-        "como_resolver": "Consulte a Wiki CIGAM para mais detalhes.",
-        "fonte": "Wiki CIGAM"
-    }
+    return {"erro": f"Rejeição {codigo}", "como_resolver": "Consulte a Wiki CIGAM.", "fonte": "Wiki CIGAM"}
 
 # ---------- ENDPOINTS ----------
 @app.get("/")
 def root():
     return {"status": "ok", "mensagem": "API Validador NF-e CIGAM rodando!"}
 
-
 @app.post("/nfe/validate-xml")
 async def validate_nfe_xml(req: XmlRequest):
-    """
-    Recebe um XML de NF-e e retorna validação + mensagem amigável.
-    """
-
-    # Corrige aspas duplas dentro do XML cru, se houver
-    xml_content = req.xml.replace('\\"', '"').replace("\\'", "'")
-
     try:
-        # tenta parsear XML
-        xml_tree = etree.fromstring(xml_content.encode("utf-8"))
+        xml_tree = etree.fromstring(req.xml.encode("utf-8"))
 
-        # ⚠️ Aqui entra a validação XSD (se tiver)
-        # Por enquanto: simula um código de rejeição
-        codigo = 225  # exemplo fixo
+        # Simula código de rejeição
+        codigo = 225
 
-        # Retorna mensagem friendly se existir
         if codigo in friendly_messages:
-            return {
-                "codigo": codigo,
-                **friendly_messages[codigo],
-                "fonte": "Tratamento interno CIGAM"
-            }
+            return {"codigo": codigo, **friendly_messages[codigo], "fonte": "Tratamento interno CIGAM"}
 
-        # Se não tiver → busca na Wiki
         wiki_info = buscar_na_wiki(codigo)
-        return {
-            "codigo": codigo,
-            **wiki_info
-        }
+        return {"codigo": codigo, **wiki_info}
 
     except etree.XMLSyntaxError as e:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "parser": "error",
-                "tipo_mensagem": "Pedido de Autorização de Uso NF-e",
-                "erros": [
-                    {
-                        "campo": "XML",
-                        "mensagem": str(e),
-                        "sugestao": None,
-                        "fonte": f"https://www.cigam.com.br/wiki/index.php?title=FAQ_NE&search={str(e).replace(' ', '%20')}&ns0=1"
-                    }
-                ]
-            }
-        )
+        raise HTTPException(status_code=400, detail=f"Erro de sintaxe XML: {str(e)}")
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Falha ao processar XML: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Falha ao processar XML: {str(e)}")
+
+# ---------- RUN SERVER ----------
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run("app:app", host="0.0.0.0", port=port, reload=True)
