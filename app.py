@@ -1,93 +1,49 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi import FastAPI, UploadFile, HTTPException
+from fastapi.responses import JSONResponse
 from lxml import etree
-import requests
-import threading
-import os
-import tempfile
 
-app = FastAPI()
+app = FastAPI(
+    title="API Validador NF-e CIGAM",
+    description="Valida XML de NF-e e retorna erros de sintaxe detalhados",
+    version="1.0.0"
+)
 
-# URLs oficiais dos XSDs
-XSD_URLS = {
-    "enviNFe": "https://www.nfe.fazenda.gov.br/NFe/arquivos/nfe_v4.00.xsd"
-}
+@app.get("/")
+async def root():
+    return {"status": "ok", "mensagem": "API Validador NF-e CIGAM rodando!"}
 
-# Cache em memória
-XSD_CACHE = {}
-CACHE_LOCK = threading.Lock()
-
-class XMLPayload(BaseModel):
-    xml: str
-
-def get_schema(xsd_name: str) -> etree.XMLSchema:
+@app.post("/nfe/validate-xml")
+async def validate_xml(file: UploadFile):
     """
-    Retorna o schema do cache, ou carrega do disco (/tmp), ou baixa da SEFAZ.
+    Valida XML enviado via upload.
+    Retorna erro de sintaxe com linha, coluna e trecho problemático se XML estiver inválido.
     """
-    with CACHE_LOCK:
-        if xsd_name in XSD_CACHE:
-            return XSD_CACHE[xsd_name]
+    if not file.filename.endswith(".xml"):
+        raise HTTPException(status_code=400, detail="Arquivo enviado não é XML")
 
-        if xsd_name not in XSD_URLS:
-            raise HTTPException(status_code=400, detail=f"Schema não configurado para {xsd_name}")
-
-        url = XSD_URLS[xsd_name]
-        temp_path = os.path.join(tempfile.gettempdir(), f"{xsd_name}.xsd")
-
-        # 1) Se já existe em disco, tenta carregar
-        if os.path.exists(temp_path):
-            try:
-                with open(temp_path, "rb") as f:
-                    schema_root = etree.XML(f.read())
-                    schema = etree.XMLSchema(schema_root)
-                    XSD_CACHE[xsd_name] = schema
-                    return schema
-            except Exception:
-                # se o arquivo em disco estiver corrompido, baixa de novo
-                pass
-
-        # 2) Baixa da SEFAZ
-        try:
-            resp = requests.get(url, timeout=15)
-            resp.raise_for_status()
-        except requests.RequestException as e:
-            raise HTTPException(status_code=502, detail=f"Erro ao baixar XSD da SEFAZ: {str(e)}")
-
-        # 3) Salva no /tmp
-        try:
-            with open(temp_path, "wb") as f:
-                f.write(resp.content)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Erro ao salvar XSD em /tmp: {str(e)}")
-
-        # 4) Compila e guarda em cache
-        try:
-            schema_root = etree.XML(resp.content)
-            schema = etree.XMLSchema(schema_root)
-            XSD_CACHE[xsd_name] = schema
-            return schema
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Erro ao compilar XSD: {str(e)}")
-
-@app.post("/validar-nfe")
-def validar_nfe(payload: XMLPayload):
-    """
-    Valida um XML de NF-e contra o XSD oficial da SEFAZ.
-    """
     try:
-        xml_doc = etree.fromstring(payload.xml.encode("utf-8"))
+        content = await file.read()
+        etree.fromstring(content)  # parsea o XML
+        return JSONResponse(content={"sucesso": True, "mensagem": "XML válido!"})
+    
+    except etree.XMLSyntaxError as e:
+        # Pega a linha problemática do XML
+        lines = content.decode('utf-8', errors='replace').splitlines()
+        erro_linha = lines[e.lineno - 1] if 0 < e.lineno <= len(lines) else ""
+        # Retorna linha, coluna e trecho
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "mensagem": f"Erro de sintaxe no XML: {e.msg}",
+                "linha": e.lineno,
+                "coluna": e.position[1],
+                "trecho": erro_linha.strip()
+            }
+        )
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Erro ao parsear XML: {str(e)}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Erro ao processar XML: {str(e)}"
+        )
 
-    schema = get_schema("enviNFe")
-
-    try:
-        schema.assertValid(xml_doc)
-        return {"status": "OK", "mensagem": "XML válido segundo schema SEFAZ"}
-    except etree.DocumentInvalid as e:
-        return {
-            "status": "Erro",
-            "codigo": 225,
-            "mensagem": "Rejeicao: Falha no Schema XML da NFe",
-            "detalhe": str(e)
-        }
+# Rodar com: uvicorn app:app --reload --port 8080
