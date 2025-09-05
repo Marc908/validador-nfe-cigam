@@ -2,6 +2,7 @@ from fastapi import FastAPI, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
 from lxml import etree
 import os
+import uvicorn          # <--- ESSA LINHA É O QUE ESTAVA FALTANDO
 
 app = FastAPI(title="Validador NF-e Local")
 
@@ -78,4 +79,5 @@ def root():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run("app:app", host="0.0.0.0", port=port, reload=True)
+
 
