@@ -1,8 +1,9 @@
-from fastapi import FastAPI, UploadFile, HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from lxml import etree
 import os
-import uvicorn          # <--- ESSA LINHA É O QUE ESTAVA FALTANDO
+import uvicorn
 
 app = FastAPI(title="Validador NF-e Local")
 
@@ -21,7 +22,7 @@ def carregar_xsd(xsd_file: str):
 def validar_regras_negocio(xml_root):
     erros = []
 
-    # Exemplo CST obrigatório (só como demonstração)
+    # Exemplo CST obrigatório
     for det in xml_root.findall(".//{http://www.portalfiscal.inf.br/nfe}det"):
         cst = det.find(".//{http://www.portalfiscal.inf.br/nfe}CST")
         if cst is not None and cst.text not in ["00","01","02","03","04","05","49","50","51","52","53","54","55","99"]:
@@ -34,14 +35,14 @@ def validar_regras_negocio(xml_root):
 
     return erros
 
-@app.post("/nfe/validate-xml")
-async def validate_xml(file: UploadFile):
-    if not file.filename.endswith(".xml"):
-        raise HTTPException(status_code=400, detail="O arquivo deve ser XML")
+# Modelo para receber XML cru via JSON
+class XmlRequest(BaseModel):
+    xml: str
 
+@app.post("/nfe/validate-xml")
+async def validate_xml(request: XmlRequest):
     try:
-        content = await file.read()
-        xml_doc = etree.fromstring(content)
+        xml_doc = etree.fromstring(request.xml.encode("utf-8"))
     except Exception as e:
         return JSONResponse(
             status_code=400,
@@ -75,9 +76,6 @@ async def validate_xml(file: UploadFile):
 def root():
     return {"status": "ok", "mensagem": "API Validador NF-e Local rodando!"}
 
-# ---------- RUN SERVER ----------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run("app:app", host="0.0.0.0", port=port, reload=True)
-
-
