@@ -7,76 +7,69 @@ import uvicorn
 
 app = FastAPI(title="Validador NF-e Local")
 
-# Caminho para os XSDs locais
-XSD_DIR = "./xsd"  # coloque enviNFe_v4.00.xsd aqui
+XSD_DIR = "./xsd"
 
 def carregar_xsd(xsd_file: str):
     try:
-        with open(os.path.join(XSD_DIR, xsd_file), 'rb') as f:
+        with open(os.path.join(XSD_DIR, xsd_file), "rb") as f:
             schema_doc = etree.parse(f)
             return etree.XMLSchema(schema_doc)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao carregar XSD: {e}")
 
-# Função para validação de regras básicas
 def validar_regras_negocio(xml_root):
     erros = []
-
-    # Exemplo CST obrigatório
     for det in xml_root.findall(".//{http://www.portalfiscal.inf.br/nfe}det"):
         cst = det.find(".//{http://www.portalfiscal.inf.br/nfe}CST")
-        if cst is not None and cst.text not in [
-            "00","01","02","03","04","05","49","50","51","52","53","54","55","99"
-        ]:
+        if cst is not None and cst.text not in ["00","01","02","03","04","05","49","50","51","52","53","54","55","99"]:
             erros.append(f"CST inválido: {cst.text}")
-
-    # Exemplo de campo obrigatório Id da NFe
     chave = xml_root.find(".//{http://www.portalfiscal.inf.br/nfe}Id")
     if chave is None or not chave.text:
         erros.append("Campo Id da NFe obrigatório ausente")
-
     return erros
 
-# Modelo para receber XML cru
 class XmlRequest(BaseModel):
     xml: str
 
 @app.post("/nfe/validate-xml")
-async def validate_xml(request: XmlRequest):
-    # Tenta ler XML
+async def validate_xml(request: Request):
+    # Tentar ler como JSON primeiro
     try:
-        xml_doc = etree.fromstring(request.xml.encode("utf-8"))
+        body = await request.json()
+        xml_str = body.get("xml", "")
+    except Exception:
+        # Se não for JSON, tratar body cru como XML
+        xml_str = await request.body()
+        xml_str = xml_str.decode("utf-8")
+
+    if not xml_str.strip():
+        return JSONResponse(
+            status_code=400,
+            content={"sucesso": False, "mensagem": "Nenhum XML enviado"}
+        )
+
+    try:
+        xml_doc = etree.fromstring(xml_str.encode("utf-8"))
     except Exception as e:
         return JSONResponse(
             status_code=400,
             content={"sucesso": False, "mensagem": f"Erro ao ler XML: {e}"}
         )
 
-    # Validação XSD
-    erros_xsd = []
     try:
-        schema = carregar_xsd("enviNFe_v4.00.xsd")
+        schema = carregar_xsd("nfe_v4.00.xsd")
         schema.assertValid(xml_doc)
     except etree.DocumentInvalid as e:
-        # Captura todos os erros de validação XSD
-        for erro in e.error_log:
-            erros_xsd.append(f"Linha {erro.line}: {erro.message}")
-
-    # Validação regras de negócio
-    erros_negocio = validar_regras_negocio(xml_doc)
-
-    # Se houver algum erro, retorna todos
-    if erros_xsd or erros_negocio:
         return JSONResponse(
             status_code=400,
-            content={
-                "sucesso": False,
-                "mensagem": "Erros de validação XML",
-                "detalhes": {
-                    "xsd": erros_xsd,
-                    "regras_negocio": erros_negocio
-                }
-            }
+            content={"sucesso": False, "mensagem": f"Erro de validação XSD: {str(e)}"}
+        )
+
+    erros_negocio = validar_regras_negocio(xml_doc)
+    if erros_negocio:
+        return JSONResponse(
+            status_code=400,
+            content={"sucesso": False, "mensagem": "Erros de regras de negócio", "detalhes": erros_negocio}
         )
 
     return JSONResponse(
