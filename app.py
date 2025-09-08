@@ -7,7 +7,7 @@ import os
 app = FastAPI(title="Validador NF-e Local")
 
 # Caminho para os XSDs locais
-XSD_DIR = "./xsd"  # coloque seus XSDs aqui
+XSD_DIR = "./xsd"  # coloque seus XSDs aqui (ex: enviNFe_v4.00.xsd)
 
 # Função para carregar o XSD
 def carregar_xsd(xsd_file: str):
@@ -31,8 +31,8 @@ def validar_regras_negocio(xml_root):
             erros.append(f"CST inválido: {cst.text}")
 
     # Exemplo: campo Id obrigatório
-    chave = xml_root.find(".//{http://www.portalfiscal.inf.br/nfe}Id")
-    if chave is None or not chave.text:
+    chave = xml_root.find(".//{http://www.portalfiscal.inf.br/nfe}infNFe")
+    if chave is None or not chave.get("Id"):
         erros.append("Campo Id da NFe obrigatório ausente")
 
     return erros
@@ -72,9 +72,9 @@ async def validate_xml(request: Request):
             content={"sucesso": False, "mensagem": f"Erro ao ler XML: {e}"}
         )
 
-    # Validação XSD
+    # Validação XSD (enviNFe)
     try:
-        schema = carregar_xsd("nfe_v4.00.xsd")  # seu XSD local
+        schema = carregar_xsd("enviNFe_v4.00.xsd")  # agora usa enviNFe_v4.00.xsd
         schema.assertValid(xml_doc)
     except etree.DocumentInvalid as e:
         return JSONResponse(
