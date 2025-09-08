@@ -6,8 +6,7 @@ import uvicorn
 
 app = FastAPI(title="Validador NF-e Local")
 
-# Caminho para os XSDs locais
-XSD_DIR = "./xsd"
+XSD_DIR = "./xsd"  # pasta com XSDs
 
 def carregar_xsd(xsd_file: str):
     try:
@@ -19,29 +18,29 @@ def carregar_xsd(xsd_file: str):
 
 def validar_regras_negocio(xml_root):
     erros = []
-
+    # Exemplo CST obrigatório
     for det in xml_root.findall(".//{http://www.portalfiscal.inf.br/nfe}det"):
         cst = det.find(".//{http://www.portalfiscal.inf.br/nfe}CST")
         if cst is not None and cst.text not in ["00","01","02","03","04","05","49","50","51","52","53","54","55","99"]:
             erros.append(f"CST inválido: {cst.text}")
-
+    # Exemplo de campo obrigatório
     chave = xml_root.find(".//{http://www.portalfiscal.inf.br/nfe}Id")
     if chave is None or not chave.text:
         erros.append("Campo Id da NFe obrigatório ausente")
-
     return erros
 
 @app.post("/nfe/validate-xml")
 async def validate_xml(request: Request):
     try:
-        xml_body = await request.body()
-        xml_doc = etree.fromstring(xml_body)
+        body_bytes = await request.body()
+        xml_doc = etree.fromstring(body_bytes)
     except Exception as e:
         return JSONResponse(
             status_code=400,
             content={"sucesso": False, "mensagem": f"Erro ao ler XML: {e}"}
         )
 
+    # Validar schema
     try:
         schema = carregar_xsd("nfe_v4.00.xsd")
         schema.assertValid(xml_doc)
@@ -51,6 +50,7 @@ async def validate_xml(request: Request):
             content={"sucesso": False, "mensagem": f"Erro de validação XSD: {str(e)}"}
         )
 
+    # Validar regras de negócio
     erros_negocio = validar_regras_negocio(xml_doc)
     if erros_negocio:
         return JSONResponse(
