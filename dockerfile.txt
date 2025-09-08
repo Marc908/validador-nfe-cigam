@@ -1,18 +1,18 @@
 # Imagem base Python
 FROM python:3.11-slim
 
-# Configura pasta de trabalho
+# Define pasta de trabalho
 WORKDIR /app
 
-# Copia requirements e instala dependências
+# Copia e instala dependências
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copia o restante do código
+# Copia a aplicação
 COPY . .
 
-# Expõe porta (Railway define dinamicamente via variável PORT)
+# Expõe porta (Railway define dinamicamente)
 EXPOSE 8080
 
-# Comando para rodar a API
+# Comando para rodar
 CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8080}"]
